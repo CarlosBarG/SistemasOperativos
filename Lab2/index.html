@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador de memoria RAM</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Simulación de la memoria en un sistema multiprogramado</h1>
+  </header>
+
+  <main>
+    <section class="controles" aria-label="Controles de la simulación">
+      <div class="grupo-controles">
+        <div class="control-con-etiqueta">
+          <label for="tipo-particion">Tipo de partición</label>
+          <select id="tipo-particion" title="Tipo de partición">
+            <option value="fija">Particiones estáticas de tamaño fijo</option>
+            <option value="variable">Particiones estáticas de tamaño variable</option>
+            <option value="dinamica">Particiones dinámicas sin compactación</option>
+            <option value="compactada">Particiones dinámicas con compactación</option>
+          </select>
+        </div>
+        <button id="iniciar" type="button">Iniciar simulación ▶</button>
+        <button id="detener" type="button" disabled>Detener simulación</button>
+        <button id="reiniciar" type="button">Reiniciar simulación</button>
+      </div>
+      <div class="control-con-etiqueta">
+        <label for="algoritmo">Algoritmo de ajuste</label>
+        <select id="algoritmo" title="Algoritmo de ajuste">
+          <option value="secuencial">No aplica / Secuencial</option>
+          <option value="first">Primer Ajuste (First-Fit)</option>
+          <option value="best">Mejor Ajuste (Best-Fit)</option>
+          <option value="worst">Peor Ajuste (Worst-Fit)</option>
+        </select>
+      </div>
+    </section>
+
+    <div class="barra-informacion">
+      <span id="mensaje">Listo para iniciar la simulación.</span>
+      <span id="reloj">Evento 0</span>
+    </div>
+
+    <section class="contenido">
+      <section class="seccion">
+        <h2 class="titulo-seccion">Programas</h2>
+        <div id="lista-programas" class="lista-programas"></div>
+      </section>
+
+      <section class="seccion">
+        <h2 class="titulo-seccion">Tabla de descripción de particiones</h2>
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>PID / Proceso</th>
+                <th>Estado (L/O)</th>
+                <th>Dirección base</th>
+                <th>Tamaño del bloque</th>
+                <th>Frag. interna</th>
+                <th>Frag. externa</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-particiones"></tbody>
+          </table>
+        </div>
+        <div class="resumen">
+          <span id="resumen-ocupacion">RAM de usuario: 0% ocupada</span>
+          <span id="resumen-huecos">Huecos libres: 0</span>
+        </div>
+      </section>
+
+      <section class="seccion seccion-ram">
+        <h2 class="titulo-seccion">RAM</h2>
+        <div class="ram-marco">
+          <div class="escala" aria-hidden="true">
+            <span>0xFFFFFF</span>
+            <span>0x400000</span>
+            <span>0x800000</span>
+            <span>0xC00000</span>
+            <span>0x000000</span>
+          </div>
+          <div id="ram" class="ram" aria-label="Representación visual de la memoria RAM"></div>
+        </div>
+        <div class="leyenda">
+          <span><i class="muestra so"></i> Sistema operativo</span>
+          <span><i class="muestra libre"></i> Libre</span>
+          <span>Los colores identifican cada programa</span>
+        </div>
+        <button id="compactar" class="compactar" type="button">Compactar memoria</button>
+      </section>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
