@@ -26,6 +26,8 @@ const tipoParticion = document.querySelector('#tipo-particion');
 const algoritmo = document.querySelector('#algoritmo');
 const listaProgramas = document.querySelector('#lista-programas');
 const tablaParticiones = document.querySelector('#tabla-particiones');
+const tablaFragmentos = document.querySelector('#tabla-fragmentos');
+const tablaFragmentosContenedor = document.querySelector('#tabla-fragmentos-contenedor');
 const ram = document.querySelector('#ram');
 const mensaje = document.querySelector('#mensaje');
 const reloj = document.querySelector('#reloj');
@@ -277,6 +279,26 @@ function renderizarTabla() {
   });
 }
 
+// Muestra los huecos libres individuales de la partición dinámica sin compactación.
+function renderizarTablaFragmentos() {
+  const mostrarTabla = tipoParticion.value === 'dinamica';
+  tablaFragmentosContenedor.hidden = !mostrarTabla;
+  if (!mostrarTabla) return;
+
+  tablaFragmentos.innerHTML = '';
+  const huecos = obtenerHuecos();
+
+  huecos.forEach((hueco, indice) => {
+    const fila = document.createElement('tr');
+    fila.innerHTML = `
+      <td>Fragmento ${indice + 1}</td>
+      <td>${formatearHex(hueco.base)}</td>
+      <td>${formatearTamano(hueco.tamano)}</td>
+    `;
+    tablaFragmentos.appendChild(fila);
+  });
+}
+
 // Dibuja cada segmento con una altura proporcional al tamaño real de la RAM.
 function renderizarRAM() {
   ram.innerHTML = '';
@@ -308,6 +330,7 @@ function renderizarResumen() {
 function renderizarTodo() {
   renderizarProgramas();
   renderizarTabla();
+  renderizarTablaFragmentos();
   renderizarRAM();
   renderizarResumen();
 }

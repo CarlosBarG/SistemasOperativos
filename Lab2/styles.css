@@ -165,6 +165,20 @@ tr:last-child td { border-bottom: 0; }
   font-size: 0.79rem;
 }
 
+.tabla-fragmentos {
+  margin-top: 18px;
+}
+
+.tabla-fragmentos[hidden] {
+  display: none;
+}
+
+.tabla-fragmentos h3 {
+  margin: 0 0 10px;
+  font-size: 0.9rem;
+  font-weight: normal;
+}
+
 .ram-marco {
   display: flex;
   gap: 10px;
