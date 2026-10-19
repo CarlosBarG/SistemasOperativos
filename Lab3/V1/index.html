@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador de memoria RAM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="cabecera">
+    <p class="eyebrow">Sistemas Operativos · Laboratorio 3: Gestión de memoria avanzada</p>
+    <h1>Simulación de la memoria en un sistema multiprogramado</h1>
+    <p class="eyebrow"></p>
+    <p class="eyebrow">Cristian Santiago Lopez Cadena · 20222020027</p>
+    <p class="eyebrow">Carlos Alberto Barriga Gamez · 20222020179</p>
+  </header>
+
+  <main>
+    <div class="barra-informacion" aria-label="Registro de la simulación">
+      <span id="mensaje">Puedes cargar o liberar programas en cualquier momento, con o sin la simulación iniciada.</span>
+      <span id="reloj">Evento 0</span>
+    </div>
+
+    <div class="ram-uso" aria-label="Uso de RAM">
+      <div class="ram-uso-etiqueta">
+        <span class="ram-uso-uso">Uso de RAM: <span id="ram-uso-porcentaje">0.0%</span></span>
+        <span id="ram-uso-disponible" class="ram-uso-disponible">RAM disponible: 0.0 KiB</span>
+      </div>
+      <div class="ram-uso-barra">
+        <div id="ram-uso-relleno" class="ram-uso-relleno"></div>
+      </div>
+    </div>
+
+    <!-- ===== CONTROLES ===== -->
+    <section class="controles" aria-label="Controles de la simulación">
+      <div class="control-con-etiqueta">
+        <label for="tipo-particion">Modo de gestión</label>
+        <select id="tipo-particion" title="Modo de gestión de memoria">
+          <optgroup label="Particiones contiguas">
+            <option value="fija">Particiones estáticas de tamaño fijo</option>
+            <option value="variable">Particiones estáticas de tamaño variable</option>
+            <option value="dinamica">Particiones dinámicas sin compactación</option>
+            <option value="compactada">Particiones dinámicas con compactación</option>
+          </optgroup>
+          <optgroup label="No contigua">
+            <option value="segmentacion">Segmentación</option>
+            <option value="paginacion">Paginación</option>
+          </optgroup>
+        </select>
+        <!-- Input solo visible en particiones fijas -->
+        <input id="tamano-particion-fija" type="number" inputmode="numeric" min="1" step="1" value="1024"
+               placeholder="Tamaño en KiB" title="Tamaño de cada partición fija, en KiB" hidden>
+        <!-- Selector de tamaño de página: solo visible en paginación -->
+        <select id="tamano-pagina" title="Tamaño de página" hidden>
+          <option value="4096">4 KiB — 32 bits</option>
+          <option value="8192">8 KiB — 64 bits</option>
+        </select>
+      </div>
+
+      <div class="grupo-botones">
+        <button id="detener" type="button" disabled>■ Detener</button>
+        <button id="iniciar" type="button">▶ Iniciar</button>
+        <button id="reiniciar" type="button">↻ Reiniciar</button>
+      </div>
+
+      <div class="control-con-etiqueta">
+        <label for="algoritmo">Algoritmo de ajuste</label>
+        <select id="algoritmo" title="Algoritmo de ajuste">
+          <option value="secuencial">No aplica / Secuencial</option>
+          <option value="first">Primer Ajuste (First-Fit)</option>
+          <option value="best">Mejor Ajuste (Best-Fit)</option>
+          <option value="worst">Peor Ajuste (Worst-Fit)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- ===== CONTENIDO ===== -->
+    <section class="contenido">
+
+      <!-- Panel izquierdo: lista de programas (siempre visible) -->
+      <section class="seccion seccion-programas">
+        <h2 class="titulo-seccion">Programas</h2>
+        <div class="panel panel-amarillo">
+          <div id="lista-programas" class="lista-programas"></div>
+          <button id="agregar-programa" class="agregar-programa" type="button">Agregar programa +</button>
+        </div>
+      </section>
+
+      <!-- Panel central: tablas (cambia según el modo) -->
+      <section class="seccion seccion-tabla">
+
+        <!-- ── MODO PARTICIONES: tabla de particiones ── -->
+        <div id="vista-particiones">
+          <h2 class="titulo-seccion">Tabla de descripción de particiones</h2>
+          <div class="panel panel-azul">
+            <div class="tabla-contenedor">
+              <table>
+                <thead>
+                  <tr>
+                    <th>PID / Proceso</th>
+                    <th>Estado (L/O)</th>
+                    <th>Dirección base</th>
+                    <th>Tamaño del bloque</th>
+                    <th>Frag. interna</th>
+                    <th>Frag. externa</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-particiones"></tbody>
+              </table>
+            </div>
+            <div class="resumen">
+              <span id="resumen-ocupacion">RAM de usuario: 0% ocupada</span>
+              <span id="resumen-huecos">Huecos libres: 0</span>
+            </div>
+            <!-- Tabla de fragmentos libres (dinámica sin compactación) -->
+            <div id="tabla-fragmentos-contenedor" class="tabla-fragmentos" hidden>
+              <h3>Tabla de fragmentos libres</h3>
+              <div class="tabla-contenedor">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fragmento</th>
+                      <th>Dirección base</th>
+                      <th>Tamaño</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tabla-fragmentos"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── MODO SEGMENTACIÓN ── -->
+        <div id="vista-segmentacion" hidden>
+          <h2 class="titulo-seccion">Tabla de segmentos</h2>
+          <div class="panel panel-azul">
+            <div class="tabla-contenedor">
+              <table>
+                <thead>
+                  <tr>
+                    <th>PID</th>
+                    <th>N.º (Dec)</th>
+                    <th>N.º (Hex)</th>
+                    <th>Base (Dec)</th>
+                    <th>Base (Hex)</th>
+                    <th>Límite (Dec)</th>
+                    <th>Límite (Hex)</th>
+                    <th>Permisos</th>
+                    <th>Nombre</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-segmentos"></tbody>
+              </table>
+            </div>
+            <div class="resumen" id="resumen-seg">
+              <span id="resumen-seg-ocupacion">RAM de usuario: 0% ocupada</span>
+              <span id="resumen-seg-segs">Segmentos cargados: 0</span>
+            </div>
+            <!-- Fragmentos libres para segmentación -->
+            <div class="tabla-fragmentos" style="margin-top:18px;">
+              <h3>Tabla de fragmentos libres</h3>
+              <div class="tabla-contenedor">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Base (Dec)</th>
+                      <th>Base (Hex)</th>
+                      <th>Tamaño</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tabla-fragmentos-seg"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── MODO PAGINACIÓN ── -->
+        <div id="vista-paginacion" hidden>
+          <h2 class="titulo-seccion">Tabla de páginas</h2>
+          <div class="panel panel-azul">
+            <!-- Tabla de páginas por proceso -->
+            <div class="tabla-contenedor">
+              <table>
+                <thead>
+                  <tr>
+                    <th>PID</th>
+                    <th>Página (Dec)</th>
+                    <th>Página (Hex)</th>
+                    <th>Marco (Dec)</th>
+                    <th>Marco (Hex)</th>
+                    <th>Presente</th>
+                    <th>Segmento</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-paginas"></tbody>
+              </table>
+            </div>
+
+            <!-- Panel de cálculo del último proceso cargado -->
+            <div id="calculo-paginacion-contenedor" class="tabla-fragmentos" style="margin-top:18px;" hidden>
+              <h3>Cálculo de paginación — último proceso cargado</h3>
+              <div class="tabla-contenedor">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Campo</th>
+                      <th>Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tabla-calculo-paginacion"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="resumen" id="resumen-pag">
+              <span id="resumen-pag-ocupacion">RAM de usuario: 0% ocupada</span>
+              <span id="resumen-pag-marcos">Marcos libres: 0</span>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Panel intermedio: Mapa de marcos (solo visible en Paginación) -->
+      <section class="seccion seccion-mapa-marcos" id="seccion-mapa-marcos" hidden>
+        <h2 class="titulo-seccion">Mapa de marcos</h2>
+        <div class="panel panel-azul panel-mapa-marcos">
+          <p class="mapa-marcos-ayuda">Cada casilla es un marco físico. Pasa el cursor para ver su número (Dec/Hex) y estado.</p>
+          <div id="mapa-bits-contenedor" class="mapa-bits-contenedor"></div>
+          <div class="leyenda leyenda-mapa">
+            <span><i class="muestra libre"></i> Libre (bit 0)</span>
+            <span><i class="muestra ocupado-muestra"></i> Ocupado (bit 1)</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Panel derecho: visualización RAM -->
+      <section class="seccion seccion-ram">
+        <h2 class="titulo-seccion">RAM</h2>
+        <div class="panel panel-naranja">
+          <div class="ram-marco">
+            <div class="escala" aria-hidden="true">
+              <span>0xFFFFFF</span>
+              <span>0x400000</span>
+              <span>0x800000</span>
+              <span>0xC00000</span>
+              <span>0x000000</span>
+            </div>
+            <div id="ram" class="ram" aria-label="Representación visual de la memoria RAM"></div>
+          </div>
+          <div class="leyenda" id="leyenda-ram">
+            <span><i class="muestra so"></i> SO</span>
+            <span><i class="muestra libre"></i> Libre</span>
+            <span><i class="muestra no-utilizable"></i> No utilizable</span>
+          </div>
+        </div>
+      </section>
+
+    </section><!-- /contenido -->
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
