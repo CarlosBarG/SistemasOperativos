@@ -980,11 +980,11 @@ function renderizarRAM() {
   // Se añade al final porque la RAM usa column-reverse (SO queda abajo)
 
   if (modo === 'paginacion') {
-    // ── Vista CLÁSICA de bloques verticales (igual que los demás modos) ──
-    // La cuadrícula de marcos ya no se dibuja aquí: pertenece al "Mapa de marcos".
-    // Aquí recorremos el mapa de bits y fusionamos marcos contiguos del mismo
-    // proceso (o contiguos libres) en un solo bloque apilado, para obtener el
-    // mismo aspecto de barras verticales continuas que en particiones.
+    // ── Vista por MARCO (como particiones estáticas) ──
+    // Cada marco ocupado se dibuja como su propio bloque, mostrando su
+    // dirección base en hexadecimal y qué contiene (p. ej. "P1 .text").
+    // Los marcos LIBRES contiguos sí se fusionan en un único bloque "Libre"
+    // para no generar miles de filas vacías (16 MiB / 4 KiB ≈ 3840 marcos).
     ram.classList.remove('ram-grid');
     ram.classList.add('ram');
 
@@ -992,27 +992,59 @@ function renderizarRAM() {
     const bloques  = [];
 
     mapaBitMarcos.forEach((marco, i) => {
-      const pid     = marco.pid;                       // null = libre
-      const base    = INICIO_USUARIO + i * tamMarco;
-      const ultimo  = bloques[bloques.length - 1];
-      // Fusionar con el bloque anterior si pertenece al mismo proceso (o ambos libres)
-      if (ultimo && ultimo.pid === pid) {
-        ultimo.tamano += tamMarco;
-        ultimo.marcos += 1;
-      } else {
-        bloques.push({ base, tamano: tamMarco, pid, marcos: 1 });
+      const base = INICIO_USUARIO + i * tamMarco;
+
+      if (marco.pid === null) {
+        // Marco libre → fusionar con el bloque libre anterior si lo hay
+        const ultimo = bloques[bloques.length - 1];
+        if (ultimo && ultimo.libre) {
+          ultimo.tamano  += tamMarco;
+          ultimo.marcos  += 1;
+        } else {
+          bloques.push({ libre: true, base, tamano: tamMarco, marcos: 1 });
+        }
+        return;
       }
+
+      // Marco ocupado → un bloque individual por marco.
+      // Averiguar a qué segmento (.text/.data/.bss) pertenece esta página.
+      const entradas = tablaDePagesPorPid.get(marco.pid) || [];
+      const entrada  = entradas.find(e => e.marco === i);
+      const tipoSeg  = entrada ? entrada.tipoSeg : '';
+      bloques.push({
+        libre:   false,
+        base,
+        tamano:  tamMarco,
+        pid:     marco.pid,
+        pagina:  marco.pagina,
+        marcoNum: i,
+        tipoSeg,
+      });
     });
 
     bloques.forEach(bloque => {
-      const program = bloque.pid ? obtenerPrograma(bloque.pid) : null;
-      const elem    = document.createElement('div');
-      elem.className = `bloque-ram ${program ? '' : 'libre'}`;
+      const elem = document.createElement('div');
+
+      if (bloque.libre) {
+        elem.className = 'bloque-ram libre';
+        elem.style.height = `${(bloque.tamano / RAM_TOTAL) * 100}%`;
+        elem.innerHTML = `<strong>Libre</strong><span>${formatearHex(bloque.base)} · ${bloque.marcos} marco${bloque.marcos !== 1 ? 's' : ''} · ${formatearTamano(bloque.tamano)}</span>`;
+        ram.appendChild(elem);
+        return;
+      }
+
+      const program = obtenerPrograma(bloque.pid);
+      // La clase seg-text/seg-data/seg-bss varía el brillo del color del
+      // programa para diferenciar visualmente los segmentos (igual que en
+      // el modo Segmentación).
+      const claseSeg = bloque.tipoSeg ? `seg-${bloque.tipoSeg.replace('.', '')}` : '';
+      elem.className = `bloque-ram ${claseSeg}`;
       elem.style.height = `${(bloque.tamano / RAM_TOTAL) * 100}%`;
       if (program) elem.style.background = program.color;
-      elem.innerHTML = program
-        ? `<strong>${bloque.pid} / ${program.nombre}</strong><span>${formatearHex(bloque.base)} · ${bloque.marcos} marco${bloque.marcos !== 1 ? 's' : ''} · ${formatearTamano(bloque.tamano)}</span>`
-        : `<strong>Libre</strong><span>${formatearHex(bloque.base)} · ${bloque.marcos} marco${bloque.marcos !== 1 ? 's' : ''} · ${formatearTamano(bloque.tamano)}</span>`;
+      elem.innerHTML = `
+        <strong>${bloque.pid} ${bloque.tipoSeg}</strong>
+        <span>${formatearHex(bloque.base)} · Marco ${bloque.marcoNum} · Pág. ${bloque.pagina}</span>
+      `;
       ram.appendChild(elem);
     });
 
