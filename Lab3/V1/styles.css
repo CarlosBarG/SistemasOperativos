@@ -475,6 +475,36 @@ body.modo-paginacion .contenido {
   color: rgba(255, 255, 255, 0.8);
 }
 
+/* ── Lista de instancias cargadas (una fila por copia en RAM) ── */
+.programa .instancias-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.07);
+}
+.programa .instancia-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.programa .instancia-id {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+}
+.programa .liberar-instancia {
+  min-height: 26px;
+  padding: 0 12px;
+  font-size: 0.68rem;
+  background: #f4dede;
+  color: #b23b3b;
+}
+.programa .liberar-instancia:hover:not(:disabled) { background: #efc9c9; }
+
 /* ── Fila 3: pie (estado a la izquierda, botón de acción a la derecha) ── */
 .programa-pie {
   display: flex;

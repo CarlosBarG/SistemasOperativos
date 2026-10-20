@@ -121,10 +121,46 @@ const paletaColores = [
 
 // ── Estado global de la simulación ───────────────────────
 let segmentos          = [];   // para los modos de particiones
-let estados            = {};   // pid → 'Esperando' | 'En RAM' | 'Finalizado'
+// estados: instancia-id (iid) → 'En RAM' | 'Finalizado'
+// Ya NO se indexa por el pid del programa: un mismo programa puede tener
+// varias instancias cargadas a la vez, cada una con su propio iid.
+let estados            = {};
 let numeroEvento       = 0;
 let simulacionActiva   = false;
 let simulacionIniciada = false;
+
+// ── INSTANCIAS DE PROGRAMA ───────────────────────────────
+// Para poder abrir el mismo programa varias veces (p. ej. Word dos veces),
+// separamos el CATÁLOGO de programas (array `programas`) de las INSTANCIAS
+// cargadas en RAM. Cada instancia tiene un id único `iid` con el formato
+// "P2#1", "P2#2"… donde la parte antes de '#' es el pid del programa origen.
+// Los bloques de memoria (segmentos / segmentosRam / mapaBitMarcos) y la
+// tabla de páginas se indexan por ESTE iid, no por el pid del programa.
+let instancias = [];            // [{ iid, programaPid }]
+let contadorInstancias = {};    // programaPid → nº de instancias creadas (para numerar #1, #2…)
+
+// Crea y registra una nueva instancia del programa indicado; devuelve su iid.
+function crearInstancia(programaPid) {
+  contadorInstancias[programaPid] = (contadorInstancias[programaPid] || 0) + 1;
+  const iid = `${programaPid}#${contadorInstancias[programaPid]}`;
+  instancias.push({ iid, programaPid });
+  return iid;
+}
+
+// Dado un iid ("P2#3"), devuelve el pid del programa origen ("P2").
+function pidDeInstancia(iid) {
+  return typeof iid === 'string' ? iid.split('#')[0] : iid;
+}
+
+// Dado un iid, devuelve el objeto programa del catálogo.
+function obtenerProgramaDeInstancia(iid) {
+  return obtenerPrograma(pidDeInstancia(iid));
+}
+
+// Instancias actualmente cargadas en RAM de un programa dado.
+function instanciasEnRam(programaPid) {
+  return instancias.filter(i => i.programaPid === programaPid && estados[i.iid] === 'En RAM');
+}
 
 // ── Estado para Segmentación ─────────────────────────────
 // Cada entrada de segmentosRam describe un trozo de la RAM con:
@@ -134,9 +170,11 @@ let segmentosRam = [];
 // ── Estado para Paginación ───────────────────────────────
 // Mapa de bits de marcos: array de objetos { pid: null | string, pagina: null | number }
 // índice == número de marco físico. pid=null significa libre (bit 0), pid≠null ocupado (bit 1).
+// NOTA: el campo `pid` guarda el iid de la INSTANCIA dueña del marco, no el
+// pid del programa (así dos instancias del mismo programa no se confunden).
 let mapaBitMarcos = [];
 
-// Tabla de páginas por proceso: Map<pid, Array<{ pagina, marco, tipoSeg }>>
+// Tabla de páginas por instancia: Map<iid, Array<{ pagina, marco, tipoSeg }>>
 let tablaDePagesPorPid = new Map();
 
 // Último proceso cargado (para mostrar panel de cálculo)
@@ -252,7 +290,6 @@ function agregarPrograma() {
   const pid   = generarNuevoPid();
   const color = paletaColores[programas.length % paletaColores.length];
   programas.push({ pid, nombre: nombre.trim(), tamano, color });
-  estados[pid] = 'Esperando';
   guardarProgramas();
   numeroEvento += 1;
   mostrarMensajeUsuario(`${nombre.trim()} (${pid}) se agregó a la cola de espera.`);
@@ -264,10 +301,12 @@ function eliminarPrograma(pid) {
   if (!programa) return;
   const confirmado = window.confirm(`¿Eliminar definitivamente "${programa.nombre}" (${pid})? Esta acción no se puede deshacer.`);
   if (!confirmado) return;
-  if (estados[pid] === 'En RAM') liberarProceso(pid);
+  // Liberar primero TODAS las instancias vivas de este programa en RAM.
+  instanciasEnRam(pid).forEach(inst => liberarProceso(inst.iid));
+  // Quitar del registro de instancias cualquier resto (p. ej. finalizadas).
+  instancias = instancias.filter(i => i.programaPid !== pid);
   const indice = programas.findIndex(p => p.pid === pid);
   if (indice !== -1) programas.splice(indice, 1);
-  delete estados[pid];
   guardarProgramas();
   numeroEvento += 1;
   mostrarMensajeUsuario(`${programa.nombre} (${pid}) se eliminó de la lista.`);
@@ -334,9 +373,9 @@ function seleccionarHueco(tamanoNecesario) {
   return candidatos[0]; // first-fit
 }
 
-function colocarEnHueco(hueco, programa) {
+function colocarEnHueco(hueco, programa, iid) {
   const indice    = segmentos.indexOf(hueco);
-  const proceso   = { id: `proceso-${programa.pid}`, base: hueco.base, tamano: programa.tamano, pid: programa.pid, tipo: 'proceso' };
+  const proceso   = { id: `proceso-${iid}`, base: hueco.base, tamano: programa.tamano, pid: iid, tipo: 'proceso' };
   const sobrante  = hueco.tamano - programa.tamano;
   const nuevos    = [proceso];
   if (sobrante > 0) nuevos.push({ id: `${hueco.id}-restante`, base: hueco.base + programa.tamano, tamano: sobrante, pid: null, tipo: 'hueco' });
@@ -360,43 +399,43 @@ function compactarMemoria() {
   if (base < FIN_RAM) segmentos.push({ id: 'hueco-final', base, tamano: FIN_RAM - base, pid: null, tipo: 'hueco' });
 }
 
-function asignarMemoriaParticion(pid) {
-  if (estados[pid] === 'En RAM') return false;
-  const programa = obtenerPrograma(pid);
+// Recibe el iid de una instancia (no el pid del programa).
+function asignarMemoriaParticion(iid) {
+  const programa = obtenerProgramaDeInstancia(iid);
   let destino = null;
 
   if (tipoParticion.value === 'fija') {
     destino = segmentos.find(s => s.tipo === 'particion' && s.pid === null && s.tamano >= programa.tamano);
-    if (destino) destino.pid = pid;
+    if (destino) destino.pid = iid;
   } else if (tipoParticion.value === 'variable') {
     destino = seleccionarHueco(programa.tamano);
-    if (destino) destino.pid = pid;
+    if (destino) destino.pid = iid;
   } else {
     destino = seleccionarHueco(programa.tamano);
-    if (destino) colocarEnHueco(destino, programa);
+    if (destino) colocarEnHueco(destino, programa, iid);
   }
 
   if (!destino) {
-    mostrarMensajeUsuario(`${pid} no cabe en ningún bloque libre.`);
+    mostrarMensajeUsuario(`${iid} no cabe en ningún bloque libre.`);
     return false;
   }
-  estados[pid] = 'En RAM';
+  estados[iid] = 'En RAM';
   return true;
 }
 
-function liberarProceso_Particion(pid) {
-  const seg = segmentos.find(s => s.pid === pid);
+function liberarProceso_Particion(iid) {
+  const seg = segmentos.find(s => s.pid === iid);
   if (!seg) return;
   seg.pid  = null;
   seg.tipo = tipoParticion.value === 'fija' || tipoParticion.value === 'variable' ? 'particion' : 'hueco';
-  estados[pid] = 'Finalizado';
+  estados[iid] = 'Finalizado';
   unirHuecosVecinos();
   const esCompactada = tipoParticion.value === 'compactada';
   if (esCompactada) compactarMemoria();
   numeroEvento += 1;
   mostrarMensajeUsuario(esCompactada
-    ? `${pid} liberó su espacio y la memoria se compactó automáticamente.`
-    : `${pid} liberó su espacio en RAM.`);
+    ? `${iid} liberó su espacio y la memoria se compactó automáticamente.`
+    : `${iid} liberó su espacio en RAM.`);
   renderizarTodo();
 }
 
@@ -462,9 +501,9 @@ function unirHuecosVecinosSeg() {
 // Carga un programa en modo segmentación.
 // Cada uno de sus tres segmentos (.text, .data, .bss) se coloca
 // de forma INDEPENDIENTE usando el algoritmo de ajuste seleccionado.
-function asignarMemoriaSegmentacion(pid) {
-  if (estados[pid] === 'En RAM') return false;
-  const programa  = obtenerPrograma(pid);
+// Recibe el iid de una instancia (no el pid del programa).
+function asignarMemoriaSegmentacion(iid) {
+  const programa  = obtenerProgramaDeInstancia(iid);
   const partes    = dividirEnSegmentos(programa.tamano); // [{tipo, tamano}, ...]
   const colocados = [];
 
@@ -477,26 +516,26 @@ function asignarMemoriaSegmentacion(pid) {
         c.tipoSeg = 'hueco';
       });
       unirHuecosVecinosSeg();
-      mostrarMensajeUsuario(`${pid} no cabe: el segmento ${parte.tipo} (${formatearTamano(parte.tamano)}) no tiene hueco disponible.`);
+      mostrarMensajeUsuario(`${iid} no cabe: el segmento ${parte.tipo} (${formatearTamano(parte.tamano)}) no tiene hueco disponible.`);
       return false;
     }
-    const seg = colocarSegmentoEnHueco(hueco, pid, parte.tipo, TIPOS_SEGMENTO.findIndex(t => t.nombre === parte.tipo), parte.tamano);
+    const seg = colocarSegmentoEnHueco(hueco, iid, parte.tipo, TIPOS_SEGMENTO.findIndex(t => t.nombre === parte.tipo), parte.tamano);
     colocados.push(seg);
   }
 
-  estados[pid] = 'En RAM';
+  estados[iid] = 'En RAM';
   return true;
 }
 
-// Libera todos los segmentos de un proceso en modo segmentación.
-function liberarProceso_Segmentacion(pid) {
+// Libera todos los segmentos de una instancia en modo segmentación.
+function liberarProceso_Segmentacion(iid) {
   segmentosRam.forEach(s => {
-    if (s.pid === pid) { s.pid = null; s.tipoSeg = 'hueco'; }
+    if (s.pid === iid) { s.pid = null; s.tipoSeg = 'hueco'; }
   });
   unirHuecosVecinosSeg();
-  estados[pid] = 'Finalizado';
+  estados[iid] = 'Finalizado';
   numeroEvento += 1;
-  mostrarMensajeUsuario(`${pid} liberó sus segmentos de RAM.`);
+  mostrarMensajeUsuario(`${iid} liberó sus segmentos de RAM.`);
   renderizarTodo();
 }
 
@@ -528,9 +567,9 @@ function obtenerMarcosLibres() {
 // Carga un programa en modo paginación.
 // Divide el programa en segmentos, luego en páginas, y asigna
 // un marco libre por página (cualquier marco sirve; no hay First/Best/Worst).
-function asignarMemoriaPaginacion(pid) {
-  if (estados[pid] === 'En RAM') return false;
-  const programa       = obtenerPrograma(pid);
+// Recibe el iid de una instancia (no el pid del programa).
+function asignarMemoriaPaginacion(iid) {
+  const programa       = obtenerProgramaDeInstancia(iid);
   const tamPagina      = tamanoMarcoBytesActual();
   const partesSeg      = dividirEnSegmentos(programa.tamano);
   const marcosLibres   = obtenerMarcosLibres();
@@ -546,7 +585,7 @@ function asignarMemoriaPaginacion(pid) {
   const paginasTotales = paginasPorSeg.reduce((s, x) => s + x.paginas, 0);
 
   if (paginasTotales > marcosLibres.length) {
-    mostrarMensajeUsuario(`${pid} no cabe: necesita ${paginasTotales} marcos pero solo hay ${marcosLibres.length} libres.`);
+    mostrarMensajeUsuario(`${iid} no cabe: necesita ${paginasTotales} marcos pero solo hay ${marcosLibres.length} libres.`);
     return false;
   }
 
@@ -558,19 +597,19 @@ function asignarMemoriaPaginacion(pid) {
   for (const seg of paginasPorSeg) {
     for (let p = 0; p < seg.paginas; p++) {
       const marco = marcosLibres[marcosUsados]; // bit 0 → pasa a bit 1
-      mapaBitMarcos[marco] = { pid, pagina: numeroPaginaGlobal };
+      mapaBitMarcos[marco] = { pid: iid, pagina: numeroPaginaGlobal };
       entradasPagina.push({ pagina: numeroPaginaGlobal, marco, tipoSeg: seg.tipo, presente: 1 });
       marcosUsados++;
       numeroPaginaGlobal++;
     }
   }
 
-  tablaDePagesPorPid.set(pid, entradasPagina);
+  tablaDePagesPorPid.set(iid, entradasPagina);
 
-  // Guardar datos del último proceso para el panel de cálculo
+  // Guardar datos de la última instancia para el panel de cálculo
   const fragInterna = paginasTotales * tamPagina - programa.tamano;
   ultimoCargadoPag = {
-    pid,
+    pid:           iid,
     nombre:        programa.nombre,
     tamanoTotal:   programa.tamano,
     tamPagina,
@@ -579,50 +618,62 @@ function asignarMemoriaPaginacion(pid) {
     fragInterna,
   };
 
-  estados[pid] = 'En RAM';
+  estados[iid] = 'En RAM';
   return true;
 }
 
-// Libera todos los marcos de un proceso del MAPA DE BITS (bit 1 → bit 0).
-function liberarProceso_Paginacion(pid) {
-  // Recorrer el mapa de bits y poner a libre cada marco del proceso
+// Libera todos los marcos de una instancia del MAPA DE BITS (bit 1 → bit 0).
+function liberarProceso_Paginacion(iid) {
+  // Recorrer el mapa de bits y poner a libre cada marco de la instancia
   mapaBitMarcos.forEach((marco, i) => {
-    if (marco.pid === pid) mapaBitMarcos[i] = { pid: null, pagina: null };
+    if (marco.pid === iid) mapaBitMarcos[i] = { pid: null, pagina: null };
   });
-  tablaDePagesPorPid.delete(pid);
-  estados[pid] = 'Finalizado';
+  tablaDePagesPorPid.delete(iid);
+  // Si la instancia liberada era la del panel de cálculo, limpiarlo
+  if (ultimoCargadoPag && ultimoCargadoPag.pid === iid) ultimoCargadoPag = null;
+  estados[iid] = 'Finalizado';
   numeroEvento += 1;
-  mostrarMensajeUsuario(`${pid} liberó sus marcos de página.`);
+  mostrarMensajeUsuario(`${iid} liberó sus marcos de página.`);
   renderizarTodo();
 }
 
 // ══════════════════════════════════════════════════════════
 //  PUNTO DE ENTRADA UNIFICADO: asignarMemoria / liberarProceso
 // ══════════════════════════════════════════════════════════
-function asignarMemoria(pid) {
+// Carga una NUEVA instancia del programa indicado por su pid de catálogo.
+// Cada llamada crea una instancia distinta (así Word puede abrirse 2+ veces).
+function asignarMemoria(programaPid) {
+  // Creamos la instancia primero; si la asignación falla, la descartamos.
+  const iid = crearInstancia(programaPid);
   let exito = false;
   if (esModoSegmentacion()) {
-    exito = asignarMemoriaSegmentacion(pid);
+    exito = asignarMemoriaSegmentacion(iid);
   } else if (esModoPaginacion()) {
-    exito = asignarMemoriaPaginacion(pid);
+    exito = asignarMemoriaPaginacion(iid);
   } else {
-    exito = asignarMemoriaParticion(pid);
+    exito = asignarMemoriaParticion(iid);
   }
   if (exito) {
     numeroEvento += 1;
-    mostrarMensajeUsuario(`${pid} fue asignado mediante ${nombreAlgoritmo()}.`);
+    mostrarMensajeUsuario(`${iid} fue asignado mediante ${nombreAlgoritmo()}.`);
+    renderizarTodo();
+  } else {
+    // Revertir: quitar la instancia que no llegó a cargarse
+    instancias = instancias.filter(i => i.iid !== iid);
+    delete estados[iid];
     renderizarTodo();
   }
   return exito;
 }
 
-function liberarProceso(pid) {
+// Libera una instancia concreta por su iid.
+function liberarProceso(iid) {
   if (esModoSegmentacion()) {
-    liberarProceso_Segmentacion(pid);
+    liberarProceso_Segmentacion(iid);
   } else if (esModoPaginacion()) {
-    liberarProceso_Paginacion(pid);
+    liberarProceso_Paginacion(iid);
   } else {
-    liberarProceso_Particion(pid);
+    liberarProceso_Particion(iid);
   }
 }
 
@@ -640,9 +691,10 @@ function reiniciarSimulacion(mostrarMsg = true) {
   } else {
     segmentos = crearMemoriaInicial();
   }
-  estados      = {};
+  estados            = {};
+  instancias         = [];   // al reiniciar no hay ninguna instancia cargada
+  contadorInstancias = {};
   numeroEvento = 0;
-  programas.forEach(p => { estados[p.pid] = 'Esperando'; });
   sincronizarControles();
   renderizarTodo();
   if (mostrarMsg) mostrarMensajeUsuario('Memoria reiniciada. Todos los procesos están esperando.');
@@ -705,8 +757,9 @@ function renderizarProgramas() {
     tarjeta.className = 'programa';
     tarjeta.style.setProperty('--color-programa', programa.color);
 
-    const estado = estados[programa.pid] || 'Esperando';
-    const accion = estado === 'En RAM' ? 'Liberar' : 'Cargar';
+    // Instancias vivas de este programa (puede haber 0, 1 o varias).
+    const vivas  = instanciasEnRam(programa.pid);
+    const estado = vivas.length > 0 ? `${vivas.length} en RAM` : 'Esperando';
 
     // Mini-chips de segmentos (.text / .data / .bss) solo para la UI.
     const partes = dividirEnSegmentos(programa.tamano);
@@ -714,10 +767,22 @@ function renderizarProgramas() {
       .map(p => `<span class="seg-chip">${p.tipo} ${(p.tamano / 1024).toFixed(1)}K</span>`)
       .join('');
 
-    // Estructura en tres filas flex:
+    // Lista de instancias cargadas, cada una con su propio botón "Liberar".
+    const instanciasHTML = vivas.length === 0
+      ? ''
+      : `<div class="instancias-lista">
+          ${vivas.map(inst => `
+            <div class="instancia-fila">
+              <span class="instancia-id">${inst.iid}</span>
+              <button type="button" class="liberar-instancia" data-iid="${inst.iid}">Liberar</button>
+            </div>`).join('')}
+         </div>`;
+
+    // Estructura:
     //   1. Encabezado  → PID + nombre (izquierda) · papelera (derecha)
-    //   2. Segmentos   → píldoras que hacen wrap a una segunda línea si no caben
-    //   3. Pie         → estado (izquierda) · botón Cargar/Liberar (derecha)
+    //   2. Segmentos   → píldoras
+    //   3. Instancias  → una fila por copia cargada, con su botón Liberar
+    //   4. Pie         → estado (nº en RAM) · botón "Cargar" (nueva instancia)
     tarjeta.innerHTML = `
       <div class="programa-encabezado">
         <div class="programa-identidad">
@@ -732,16 +797,20 @@ function renderizarProgramas() {
                 aria-label="Eliminar ${programa.nombre} (${programa.pid})">🗑</button>
       </div>
       <div class="segmentos-mini">${chipsHTML}</div>
+      ${instanciasHTML}
       <div class="programa-pie">
         <span class="estado">${estado}</span>
-        <button type="button" class="accion-programa">${accion}</button>
+        <button type="button" class="accion-programa">Cargar</button>
       </div>
     `;
 
-    // Acciones
+    // "Cargar" siempre crea una nueva instancia del programa.
     tarjeta.querySelector('.accion-programa').addEventListener('click', () => {
-      if (estado === 'En RAM') liberarProceso(programa.pid);
-      else asignarMemoria(programa.pid);
+      asignarMemoria(programa.pid);
+    });
+    // Cada botón "Liberar" libera su instancia concreta (por iid).
+    tarjeta.querySelectorAll('.liberar-instancia').forEach(boton => {
+      boton.addEventListener('click', () => liberarProceso(boton.dataset.iid));
     });
     tarjeta.querySelector('.eliminar-programa').addEventListener('click', () => eliminarPrograma(programa.pid));
 
@@ -759,13 +828,13 @@ function renderizarTabla() {
     return;
   }
   segmentos.forEach(seg => {
-    const programa   = seg.pid ? obtenerPrograma(seg.pid) : null;
+    const programa   = seg.pid ? obtenerProgramaDeInstancia(seg.pid) : null;
     const esNoUtil   = seg.tipo === 'no-utilizable';
     const esParticion = tipoParticion.value === 'fija' || tipoParticion.value === 'variable';
     const fragInt    = programa && esParticion ? seg.tamano - programa.tamano : 0;
     const fragExt    = !programa && !esParticion && !esNoUtil ? seg.tamano : 0;
     const clase      = programa ? 'ocupado' : esNoUtil ? 'no-utilizable' : 'libre';
-    const texto      = programa ? `${programa.pid} / ${programa.nombre}` : esNoUtil ? 'No utilizable' : 'Libre';
+    const texto      = programa ? `${seg.pid} / ${programa.nombre}` : esNoUtil ? 'No utilizable' : 'Libre';
     const codigo     = programa ? 'O' : esNoUtil ? '—' : 'L';
     const fila       = document.createElement('tr');
     fila.innerHTML = `
@@ -820,7 +889,7 @@ function renderizarTablaSegmentacion() {
       return;
     }
 
-    const programa = obtenerPrograma(seg.pid);
+    const programa = obtenerProgramaDeInstancia(seg.pid);
     const info     = TIPOS_SEGMENTO.find(t => t.nombre === seg.tipoSeg) || { permisos: '---' };
     const limite   = seg.tamano; // el límite es el tamaño del segmento (offset máximo)
 
@@ -865,13 +934,12 @@ function renderizarTablaPaginacion() {
   }
 
   // ── Tabla de páginas ──
-  tablaDePagesPorPid.forEach((entradas, pid) => {
-    const programa = obtenerPrograma(pid);
+  tablaDePagesPorPid.forEach((entradas, iid) => {
     entradas.forEach(e => {
       const addrMarco = INICIO_USUARIO + e.marco * tamanoMarcoBytesActual();
       const fila = document.createElement('tr');
       fila.innerHTML = `
-        <td class="ocupado">${pid}</td>
+        <td class="ocupado">${iid}</td>
         <td>${e.pagina}</td>
         <td>${formatearHex(e.pagina)}</td>
         <td>${e.marco}</td>
@@ -900,8 +968,8 @@ function renderizarTablaPaginacion() {
 
     let tooltip;
     if (marco.pid !== null) {
-      const prog = obtenerPrograma(marco.pid);
-      // Buscar a qué segmento (.text/.data/.bss) pertenece esta página del proceso
+      const prog = obtenerProgramaDeInstancia(marco.pid);
+      // Buscar a qué segmento (.text/.data/.bss) pertenece esta página de la instancia
       const entradas = tablaDePagesPorPid.get(marco.pid) || [];
       const entrada  = entradas.find(e => e.marco === i);
       const seg      = entrada ? ` (${entrada.tipoSeg})` : '';
@@ -1033,7 +1101,7 @@ function renderizarRAM() {
         return;
       }
 
-      const program = obtenerPrograma(bloque.pid);
+      const program = obtenerProgramaDeInstancia(bloque.pid);
       // La clase seg-text/seg-data/seg-bss varía el brillo del color del
       // programa para diferenciar visualmente los segmentos (igual que en
       // el modo Segmentación).
@@ -1058,7 +1126,7 @@ function renderizarRAM() {
     const bloques = [{ base: 0, tamano: TAMANO_SO, pid: 'SO', tipoSeg: 'so' }, ...segmentosRam];
     bloques.forEach(bloque => {
       const elem    = document.createElement('div');
-      const program = bloque.pid !== 'SO' && bloque.pid ? obtenerPrograma(bloque.pid) : null;
+      const program = bloque.pid !== 'SO' && bloque.pid ? obtenerProgramaDeInstancia(bloque.pid) : null;
       elem.className = `bloque-ram ${bloque.tipoSeg === 'so' ? 'so' : program ? `seg-${bloque.tipoSeg.replace('.', '')}` : 'libre'}`;
       elem.style.height = `${(bloque.tamano / RAM_TOTAL) * 100}%`;
       if (program) {
@@ -1083,7 +1151,7 @@ function renderizarRAM() {
     const bloques = [{ base: 0, tamano: TAMANO_SO, pid: 'SO', tipo: 'so' }, ...segmentos];
     bloques.forEach(bloque => {
       const elem    = document.createElement('div');
-      const program = bloque.pid !== 'SO' && bloque.pid ? obtenerPrograma(bloque.pid) : null;
+      const program = bloque.pid !== 'SO' && bloque.pid ? obtenerProgramaDeInstancia(bloque.pid) : null;
       const esNoUtil = bloque.tipo === 'no-utilizable';
       elem.className = `bloque-ram ${bloque.tipo === 'so' ? 'so' : program ? '' : esNoUtil ? 'no-utilizable' : 'libre'}`;
       elem.style.height = `${(bloque.tamano / RAM_TOTAL) * 100}%`;
